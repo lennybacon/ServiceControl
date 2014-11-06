@@ -1,13 +1,13 @@
 ﻿namespace ServiceControl.Infrastructure.RavenDB.Expiration
 {
     using System;
-    using System.Collections.Generic;
     using System.ComponentModel.Composition;
+    using System.Diagnostics;
     using System.Globalization;
     using System.Threading;
     using CompositeViews.Messages;
+    using Lucene.Net.Documents;
     using Raven.Abstractions;
-    using Raven.Abstractions.Commands;
     using Raven.Abstractions.Data;
     using Raven.Abstractions.Logging;
     using Raven.Database;
@@ -24,8 +24,6 @@
         DocumentDatabase Database { get; set; }
         string indexName;
         int deleteFrequencyInSeconds;
-
-        const int DeletionBatchSize = 1024;
 
         public void Execute(DocumentDatabase database)
         {
@@ -45,90 +43,26 @@
 
         void TimerCallback(object state)
         {
-            var currentTime = SystemTime.UtcNow;
-            var currentExpiryThresholdTime = currentTime.AddHours(-Settings.HoursToKeepMessagesBeforeExpiring);
-            logger.Debug("Trying to find expired documents to delete (with threshold {0})", currentExpiryThresholdTime.ToString(Default.DateTimeFormatsToWrite, CultureInfo.InvariantCulture));
-            const string queryString = "Status:3 OR Status:4";
-            var query = new IndexQuery
-            {
-                Start = 0,
-                //Cutoff = currentTime,
-                Query = queryString,
-                FieldsToFetch = new[]
-                {
-                    "__document_id",
-                    "ProcessedAt"
-                },
-                SortedFields = new[]
-                {
-                    new SortedField("ProcessedAt")
-                    {
-                        Field = "ProcessedAt",
-                        Descending = false
-                    }
-                },
-            };
-
-            var docsToExpire = 0;
-
             try
             {
-                // we may be receiving a LOT of documents to delete, so we are going to skip
-                // the cache for that, to avoid filling it up very quickly
-                using (DocumentCacher.SkipSettingDocumentsInDocumentCache())
-                using (Database.DisableAllTriggersForCurrentThread())
-                using (var cts = new CancellationTokenSource())
+                var currentTime = SystemTime.UtcNow;
+                var currentExpiryThresholdTime = currentTime.AddHours(-Settings.HoursToKeepMessagesBeforeExpiring);
+                logger.Debug("Trying to delete expired documents (with threshold {0})", currentExpiryThresholdTime.ToString(Default.DateTimeFormatsToWrite, CultureInfo.InvariantCulture));
+                var indexQuery = new IndexQuery
                 {
-                    var documentWithCurrentThresholdTimeReached = false;
-                    var items = new List<ICommandData>(DeletionBatchSize);
+                    Cutoff = currentTime,
+                    Query = string.Format("(Status:3 OR Status:4) AND (ProcessedAt:[ * TO {0} ])",
+                        DateTools.DateToString(currentExpiryThresholdTime, DateTools.Resolution.SECOND)),
+                };
 
-                    Database.Query(indexName, query, CancellationTokenSource.CreateLinkedTokenSource(Database.WorkContext.CancellationToken, cts.Token).Token,
-                        information => logger.Debug("Found {0} docs to expire, starting deleting in bulks", information.TotalResults),
-                        doc =>
-                        {
-                            if (documentWithCurrentThresholdTimeReached)
-                                return;
+                var bulkOps = new DatabaseBulkOperations(Database, null, CancellationToken.None, null);
+                var sw = new Stopwatch();
+                sw.Start();
 
-                            if (doc.Value<DateTime>("ProcessedAt") >= currentExpiryThresholdTime)
-                            {
-                                documentWithCurrentThresholdTimeReached = true;
-                                cts.Cancel();
-                                return;
-                            }
+                var result = bulkOps.DeleteByIndex(indexName, indexQuery, true);
+                sw.Stop();
 
-                            var id = doc.Value<string>("__document_id");
-                            if (!string.IsNullOrEmpty(id))
-                            {
-                                items.Add(new DeleteCommandData
-                                {
-                                    Key = id
-                                });
-
-                                if (items.Count%DeletionBatchSize == 0)
-                                {
-                                    docsToExpire += items.Count;
-                                    Database.Batch(items.ToArray());
-                                    items.Clear();
-                                }
-                            }
-                        });
-
-                    if (items.Count > 0)
-                    {
-                        docsToExpire += items.Count;
-                        Database.Batch(items.ToArray());
-                        items.Clear();
-                    }
-                }
-
-                if (docsToExpire == 0)
-                {
-                    logger.Debug("No expired documents found");
-                }
-                else
-                {
-                    logger.Debug("Deleted {0} expired documents", docsToExpire);
-                }
+                logger.Debug("Deleting {0} documents took {1} ms.", result.Length, sw.ElapsedMilliseconds);
             }
             catch (OperationCanceledException)
             {
