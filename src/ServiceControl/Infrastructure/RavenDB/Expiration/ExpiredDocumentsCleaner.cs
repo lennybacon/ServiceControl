@@ -6,7 +6,7 @@
     using System.Globalization;
     using System.Threading;
     using CompositeViews.Messages;
-    using Lucene.Net.Documents;
+    using FluentDate;
     using Raven.Abstractions;
     using Raven.Abstractions.Data;
     using Raven.Abstractions.Logging;
@@ -14,6 +14,15 @@
     using Raven.Database.Impl;
     using Raven.Database.Plugins;
     using ServiceBus.Management.Infrastructure.Settings;
+
+
+   /// <summary>
+   /// This cleaner can be be heavy on the system resources and uses stale indexes 
+   /// because of this running it to frequently will place undue stress on the system
+   /// v1.3 and earlier defaulted to running this every minute
+   /// This version defaults to 3 hours and logs a warning if interval is set lower than 1 hour
+   /// </summary>
+
 
     [InheritedExport(typeof(IStartupTask))]
     [ExportMetadata("Bundle", "customDocumentExpiration")]
@@ -23,21 +32,25 @@
         private Timer timer;
         DocumentDatabase Database { get; set; }
         string indexName;
-        int deleteFrequencyInSeconds;
+        TimeSpan deleteFrequency;
 
         public void Execute(DocumentDatabase database)
         {
             Database = database;
             indexName = new MessagesViewIndex().IndexName;
 
-            deleteFrequencyInSeconds = Settings.ExpirationProcessTimerInSeconds;
-            if (deleteFrequencyInSeconds == 0)
+            deleteFrequency = TimeSpan.FromSeconds(Settings.ExpirationProcessTimerInSeconds);
+            if (deleteFrequency < 1.Seconds())
             {
                 return;
             }
 
-            logger.Info("Initialized expired document cleaner, will check for expired documents every {0} seconds", deleteFrequencyInSeconds);
-            timer = new Timer(TimerCallback, null, TimeSpan.FromSeconds(deleteFrequencyInSeconds), Timeout.InfiniteTimeSpan);
+            if (deleteFrequency < 1.Hours())
+            {
+                logger.Warn("The expired document cleaner is set to run more than once an hour - this is not recommended (Default value: {0} (3 Hours)", 3.Hours().TotalSeconds);
+            }
+            logger.Info("Initialized expired document cleaner, will check for expired documents every {0} seconds", deleteFrequency.Seconds);
+            timer = new Timer(TimerCallback, null, deleteFrequency, Timeout.InfiniteTimeSpan);
         }
 
         void TimerCallback(object state)
@@ -50,7 +63,8 @@
                 var indexQuery = new IndexQuery
                 {
                     Cutoff = currentTime,
-                    Query = string.Format("((Status:3 OR Status:4) AND (ProcessedAt:[ * TO {0} ]))",  currentExpiryThresholdTime.ToString("O").Replace(":", @"\:").Replace("-", @"\-"))
+                    // This lucene query can fail silently if dates are not in ISO-8601 format - then escape slashes and quotes to pass it in
+                    Query = string.Format("((Status:3 OR Status:4) AND (ProcessedAt:[ * TO {0} ]))", currentExpiryThresholdTime.ToString("O").Replace(":", @"\:").Replace("-", @"\-"))
                 };
 
                 var bulkOps = new DatabaseBulkOperations(Database, null, CancellationToken.None, null);
@@ -59,7 +73,6 @@
 
                 var result = bulkOps.DeleteByIndex(indexName, indexQuery, true);
                 sw.Stop();
-
                 logger.Debug("Deleting {0} documents took {1} ms.", result.Length, sw.ElapsedMilliseconds);
             }
             catch (OperationCanceledException)
@@ -72,7 +85,7 @@
             }
             finally
             {
-                timer.Change(TimeSpan.FromSeconds(deleteFrequencyInSeconds), Timeout.InfiniteTimeSpan);
+                timer.Change(deleteFrequency, Timeout.InfiniteTimeSpan);
             }
         }
 
@@ -87,7 +100,6 @@
                 using (var waitHandle = new ManualResetEvent(false))
                 {
                     timer.Dispose(waitHandle);
-
                     waitHandle.WaitOne();
                 }
             }

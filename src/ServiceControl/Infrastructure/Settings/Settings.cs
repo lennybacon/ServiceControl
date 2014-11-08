@@ -3,6 +3,7 @@
     using System;
     using System.IO;
     using System.Linq;
+    using FluentDate;
     using NServiceBus;
     using NServiceBus.Logging;
 
@@ -116,9 +117,7 @@
                 dbFolder += String.Format("-{0}", SanitiseFolderName(VirtualDirectory));
             }
 
-            var defaultPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "Particular", "ServiceControl", dbFolder);
-
+            var defaultPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Particular", "ServiceControl", dbFolder);
             return SettingsReader<string>.Read("DbPath", defaultPath);
         }
 
@@ -132,13 +131,14 @@
         public static string Hostname = SettingsReader<string>.Read("Hostname", "localhost");
         public static string VirtualDirectory = SettingsReader<string>.Read("VirtualDirectory", String.Empty);
         public static TimeSpan HeartbeatGracePeriod = TimeSpan.Parse(SettingsReader<string>.Read("HeartbeatGracePeriod", "00:00:40"));
+
         public static string TransportType { get; set; }
 
         public static string LogPath
         {
             get
             {
-                return Environment.ExpandEnvironmentVariables(SettingsReader<string>.Read("LogPath", DefaultLogPathForInstance())); 
+                return Environment.ExpandEnvironmentVariables(SettingsReader<string>.Read("LogPath", DefaultLogPathForInstance()));
             }
         }
 
@@ -152,8 +152,8 @@
         public static bool CreateIndexSync = SettingsReader<bool>.Read("CreateIndexSync");
         public static Address AuditLogQueue;
 
-        public static int ExpirationProcessTimerInSeconds = SettingsReader<int>.Read("ExpirationProcessTimerInSeconds", 60); // default is once a minute
-        public static int HoursToKeepMessagesBeforeExpiring = SettingsReader<int>.Read("HoursToKeepMessagesBeforeExpiring", 24 * 30); // default is 30 days
+        public static int ExpirationProcessTimerInSeconds = SettingsReader<int>.Read("ExpirationProcessTimerInSeconds", (int)3.Hours().TotalSeconds);
+        public static int HoursToKeepMessagesBeforeExpiring = SettingsReader<int>.Read("HoursToKeepMessagesBeforeExpiring", (int)30.Days().TotalHours);
 
         static readonly ILog Logger = LogManager.GetLogger(typeof(Settings));
         public static string ServiceName;
