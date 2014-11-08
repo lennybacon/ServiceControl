@@ -36,8 +36,7 @@
                 return;
             }
 
-            logger.Info("Initialized expired document cleaner, will check for expired documents every {0} seconds",
-                        deleteFrequencyInSeconds);
+            logger.Info("Initialized expired document cleaner, will check for expired documents every {0} seconds", deleteFrequencyInSeconds);
             timer = new Timer(TimerCallback, null, TimeSpan.FromSeconds(deleteFrequencyInSeconds), Timeout.InfiniteTimeSpan);
         }
 
@@ -51,8 +50,7 @@
                 var indexQuery = new IndexQuery
                 {
                     Cutoff = currentTime,
-                    Query = string.Format("(Status:3 OR Status:4) AND (ProcessedAt:[ * TO {0} ])",
-                        DateTools.DateToString(currentExpiryThresholdTime, DateTools.Resolution.SECOND)),
+                    Query = string.Format("((Status:3 OR Status:4) AND (ProcessedAt:[ * TO {0} ]))",  currentExpiryThresholdTime.ToString("O").Replace(":", @"\:").Replace("-", @"\-"))
                 };
 
                 var bulkOps = new DatabaseBulkOperations(Database, null, CancellationToken.None, null);
