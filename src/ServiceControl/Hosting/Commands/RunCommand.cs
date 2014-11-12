@@ -20,27 +20,36 @@
 
             using (var service = new Host{ ServiceName = args.ServiceName} )
             {
-
-
                 using (var waitHandle = new ManualResetEvent(false))
                 {
+                    var serviceClosure = service;
+                    var waitHandleClosure = waitHandle;
                     service.OnStopping = () =>
                     {
-                        service.OnStopping = () => { };
-                        waitHandle.Set();
+                        serviceClosure.OnStopping = () => { };
+                        if (!waitHandleClosure.SafeWaitHandle.IsClosed)
+                        {
+                            waitHandleClosure.Set();
+                        }
                     };
 
                     service.Run();
 
                     Console.CancelKeyPress += (sender, e) =>
                     {
-                        service.OnStopping = () => { };
+                      serviceClosure.OnStopping = () => { };
                         e.Cancel = true;
-                        waitHandle.Set();
+                        if (!waitHandleClosure.SafeWaitHandle.IsClosed)
+                        {
+                            waitHandleClosure.Set();
+                        }
                     };
 
                     Console.WriteLine("Press Ctrl+C to exit");
-                    waitHandle.WaitOne();
+                    if (!waitHandleClosure.SafeWaitHandle.IsClosed)
+                    {
+                        waitHandleClosure.Set();
+                    }
                 }
             }
         }
